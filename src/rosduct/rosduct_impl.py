@@ -125,6 +125,7 @@ class ROSduct(object):
             msg.conn_name = topic_name
             msg.conn_type = topic_type
             msg.alias_name = local_name
+            msg.latch = False
             self.add_remote_topic(msg)
 
         for l_t in self.local_topics:
@@ -138,6 +139,7 @@ class ROSduct(object):
             msg.conn_name = topic_name
             msg.conn_type = topic_type
             msg.alias_name = remote_name
+            msg.latch = False
             self.add_local_topic(msg)
 
         # Services
@@ -281,7 +283,7 @@ class ROSduct(object):
     def remove_remote_service(self, msg):
         for i, service in enumerate(self._instances['services']):
             if msg.conn_name in service:
-                service[msg.conn_name]['bridgeservserver'].unregister()
+                service[msg.conn_name]['rosserv'].shutdown()
                 del self._instances['services'][i]
                 break
         return ROSDuctConnectionResponse()
