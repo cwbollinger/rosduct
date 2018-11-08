@@ -27,22 +27,18 @@ class BridgeProtocol(WebSocketClientProtocol):
 
     @asyncio.coroutine
     def onConnect(self, response):
-        #print('connected')
+        pass
 
     @asyncio.coroutine
     def onOpen(self):
-        #print('open')
         self.bridge.onOpen()
 
     @asyncio.coroutine
     def onMessage(self, payload, isBinary):
-        #print('message received')
-        #print(json.loads(payload))
         self.bridge.onData(payload, isBinary)
 
     @asyncio.coroutine
     def onClose(self, wasClean, code, reason):
-        #print('closing')
         if not wasClean:
             self.bridge.onError(code, reason)
 
