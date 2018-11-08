@@ -14,6 +14,8 @@ from conversions import is_ros_message_installed, is_ros_service_installed
 from pydoc import locate
 import socket
 
+from trollius import ConnectionRefusedError
+
 from rosbridge_client import ROSBridgeClient
 
 """
@@ -29,7 +31,7 @@ yaml_config = '''
 rosbridge_ip: 192.168.1.31
 rosbridge_port: 9090
 # Topics being published in the robot to expose locally
-remote_topics: [ ['/joint_states', 'sensor_msgs/JointState'], 
+remote_topics: [ ['/joint_states', 'sensor_msgs/JointState'],
                     ['/tf', 'tf2_msgs/TFMessage'],
                     ['/scan', 'sensor_msgs/LaserScan']
                     ]
@@ -102,10 +104,15 @@ class ROSduct(object):
         connected = False
         while not rospy.is_shutdown() and not connected:
             try:
-                self.client = ROSBridgeClient(
-                    self.rosbridge_ip, self.rosbridge_port)
-                connected = True
-            except socket.error as e:
+                self.client = ROSBridgeClient(self.rosbridge_ip,
+                                              self.rosbridge_port)
+                while not connected: # give the asyncio stuff time to finish
+                    rospy.sleep(1)
+                    if self.client._connected:
+                        connected = True
+                    else:
+                        print('not connected')
+            except ConnectionRefusedError as e:
                 rospy.logwarn(
                     'Error when opening websocket, is ROSBridge running?')
                 rospy.logwarn(e)
@@ -114,6 +121,7 @@ class ROSduct(object):
         # We keep track of the instanced stuff in this dict
         self._instances = {'topics': [],
                            'services': []}
+
         for r_t in self.remote_topics:
             if len(r_t) == 2:
                 topic_name, topic_type = r_t
@@ -176,6 +184,7 @@ class ROSduct(object):
                 # remote param name is the first one
                 param = param[0]
             self.last_params[param] = self.client.get_param(param)
+
 
     def add_local_topic(self, msg):
         bridgepub = self.client.publisher(msg.alias_name,
@@ -314,8 +323,7 @@ class ROSduct(object):
                            topic_type + ' got data: ' + str(message) +
                            ' which is republished remotely.')
             dict_msg = from_ROS_to_dict(message)
-            if not self.client.terminated:
-                bridgepub.publish(dict_msg)
+            bridgepub.publish(dict_msg)
         return callback_local_to_remote
 
     def create_subscribe_listener(self,
@@ -469,7 +477,7 @@ class ROSduct(object):
         """
         r = rospy.Rate(self.rate_hz)
         while not rospy.is_shutdown():
-            if self.client.terminated: # we've lost the connection
+            if not self.client._connected: # we've lost the connection
                 rospy.logerr("Unexpected disconnect from server, shutting down...")
                 rospy.signal_shutdown("We've lost the connection!")
                 #del self.client # will this remove all the pub/sub objects?

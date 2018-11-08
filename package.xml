@@ -5,6 +5,7 @@
   <description>ROSduct, the duct of ROS messages. ROSduct acts as a proxy to expose ROS topics, services and parameters from a remote roscore into a local roscore via the [rosbridge protocol](https://github.com/RobotWebTools/rosbridge_suite/blob/develop/ROSBRIDGE_PROTOCOL.md).</description>
 
   <maintainer email="Sammy.Pfeiffer@student.uts.edu.au">Sammy Pfeiffer</maintainer>
+  <maintainer email="bollingc@oregonstate.edu">Chris Bollinger</maintainer>
 
 
   <license>BSD</license>

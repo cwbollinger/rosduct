@@ -8,12 +8,48 @@ import time
 import json
 import uuid
 from ast import literal_eval
-from ws4py.client.threadedclient import WebSocketClient
+
+import trollius as asyncio
+from trollius import ConnectionRefusedError
+
+from autobahn.asyncio.websocket import WebSocketClientProtocol
+from autobahn.asyncio.websocket import WebSocketClientFactory
 # sudo pip install PyDispatcher
 from pydispatch import dispatcher
 
 
-class ROSBridgeClient(WebSocketClient):
+class BridgeProtocol(WebSocketClientProtocol):
+	# https://stackoverflow.com/questions/34676565/callbacks-from-autobahn-websocketclientprotocol-to-another-object
+
+    def __init__(self):
+        self.bridge = None
+        super(BridgeProtocol, self).__init__()
+
+    @asyncio.coroutine
+    def onConnect(self, response):
+        #print('connected')
+
+    @asyncio.coroutine
+    def onOpen(self):
+        #print('open')
+        self.bridge.onOpen()
+
+    @asyncio.coroutine
+    def onMessage(self, payload, isBinary):
+        #print('message received')
+        #print(json.loads(payload))
+        self.bridge.onData(payload, isBinary)
+
+    @asyncio.coroutine
+    def onClose(self, wasClean, code, reason):
+        #print('closing')
+        if not wasClean:
+            self.bridge.onError(code, reason)
+
+        self.bridge.onClose()
+
+
+class ROSBridgeClient(object):
     """ROSBridgeClient extends WebSocketClient and manages connection to the
     server and all interactions with ROS.
 
@@ -21,7 +57,7 @@ class ROSBridgeClient(WebSocketClient):
     service servers and action clients.
     """
 
-    def __init__(self, ip, port=9090):
+    def __init__(self, ip, port=9090, loop=None):
         """Constructor for ROSBridgeClient.
 
         Args:
@@ -29,8 +65,7 @@ class ROSBridgeClient(WebSocketClient):
             port (int, optional): The WebSocket port number for rosbridge.
                 Defaults to 9090.
         """
-        self.urlstring = 'ws://{}:{}'.format(ip, port)
-        WebSocketClient.__init__(self, self.urlstring)
+
         self._connected = False
         self._id_counter = 0
         self._publishers = {}
@@ -38,21 +73,37 @@ class ROSBridgeClient(WebSocketClient):
         self._service_clients = {}
         self._service_servers = {}
         self._action_clients = {}
+        self.protocol = None
+	self.loop = loop or asyncio.get_event_loop()
 
-        self.connect()
-        self.client_thread = threading.Thread(target=self.run_forever)
-        self.client_thread.start()
-        while not self._connected:
-            time.sleep(0.1)
+        factory = WebSocketClientFactory()
+        factory.protocol = BridgeProtocol
 
-    def reconnect(self):
-        WebSocketClient.__init__(self, self.urlstring)
-        self._connected = False
-        self.connect()
-        self.client_thread = threading.Thread(target=self.run_forever)
-        self.client_thread.start()
-        while not self._connected:
-            time.sleep(0.1)
+        coro = self.loop.create_connection(factory, ip, port)
+
+        task = self.loop.create_task(coro)
+        task.add_done_callback(self.onWebSocketInit)
+        self.loop.run_until_complete(task)
+
+        def idle(loop):
+            asyncio.set_event_loop(loop)
+            loop.run_forever()
+
+        t = threading.Thread(target=idle, args=(self.loop,))
+        t.start()
+        #self.loop.run_forever()
+        #self.loop.run_until_complete(task)
+
+    def onWebSocketInit(self, future):
+        try:
+            self.transport, self.protocol = future.result()
+            self.protocol.bridge = self
+        except Exception as e:
+            print(e)
+            self.onClose()
+
+    def sendMessage(self, msg, isBinary=False):
+        self.protocol.sendMessage(msg, isBinary)
 
     @property
     def id_counter(self):
@@ -305,7 +356,7 @@ class ROSBridgeClient(WebSocketClient):
             subscribe_id = 'subscribe:{}:{}'.format(
                 topic_name, self._id_counter)
             #print('Sending request to subscribe topic {}'.format(topic_name))
-            self.send(json.dumps({
+            self.sendMessage(json.dumps({
                 'op': 'subscribe',
                 'id': subscribe_id,
                 'topic': topic_name,
@@ -336,7 +387,7 @@ class ROSBridgeClient(WebSocketClient):
         if len(subscribers) == 0:
             #print('Sending request to unsubscribe topic {}'.format(topic_name))
             del subscribers[:]
-            self.send(json.dumps({
+            self.sendMessage(json.dumps({
                 'op': 'unsubscribe',
                 'id': subscribe_id,
                 'topic': topic_name
@@ -434,31 +485,32 @@ class ROSBridgeClient(WebSocketClient):
         if server_name + ':' + action_name in self._action_clients:
             del self._action_clients[server_name + ':' + action_name]
 
-    def opened(self):
+    def onOpen(self):
         """Called when the connection to ROS established."""
         self._connected = True
         print('Connected with rosbridge')
 
-    def closed(self, code, reason=None):
+    def onClose(self, wasClean, code, reason=None):
         """Called when the connection to ROS disconnected
 
         Args:
             code (int): A status code.
             reason (str, opitonal): A human readable message. Defaults to None.
         """
-        print('Disconnected with rosbridge: {}, {}'.format(code, reason))
+        print('Disconnected with rosbridge: {}, {}, clean={}'.format(code, reason, wasClean))
+        self._connected = False
 
-    def received_message(self, message):
+    def onError(self, code, reason):
+        print('Websocket Error: {}, {}'.format(code, reason))
+
+    def onData(self, message, isBinary):
         """Called when message received from ROS server.
 
         Only handle the message with `topic` or `service` keywords and trigger
         corresponding callback functions.
 
-        Args:
-            message(ws4py.messaging.Message): A message that sent from
-                ROS server.
         """
-        data = json.loads(message.data)
+        data = json.loads(message)
         if 'topic' in data:
             # Note that the callback argument MUST be named message (damn.)
             dispatcher.send(signal=data.get('topic'), message=data.get('msg'))
@@ -477,7 +529,7 @@ class ROSBridgeClient(WebSocketClient):
                 if service_name in self._service_servers:
                     result, values = self._service_servers[service_name].run_handler(
                         args)
-                    self.send(json.dumps({
+                    self.sendMessage(json.dumps({
                         'op': 'service_response',
                         'service': service_name,
                         'id': service_id,
@@ -502,7 +554,6 @@ class ROSBridgeClient(WebSocketClient):
             self._service_servers[service_server].unregister()
         for action_client in self._action_clients:
             self._action_clients[action_client].unregister()
-        self.close()
 
 
 class _Publisher(object):
@@ -525,7 +576,7 @@ class _Publisher(object):
         self._topic_name = topic_name
         self._usage = 1
 
-        rosbridge.send(json.dumps({
+        rosbridge.sendMessage(json.dumps({
             'op': 'advertise',
             'id': self._advertise_id,
             'topic': topic_name,
@@ -548,7 +599,7 @@ class _Publisher(object):
         Args:
             message (dict): A message to send.
         """
-        self._rosbridge.send(json.dumps({
+        self._rosbridge.sendMessage(json.dumps({
             'op': 'publish',
             'id': 'publish:{}:{}'.format(self._topic_name,
                                          self._rosbridge.id_counter),
@@ -562,7 +613,7 @@ class _Publisher(object):
         self._usage -= 1
         if self._usage <= 0:
             self._rosbridge.unregister_publisher(self._topic_name)
-            self._rosbridge.send(json.dumps({
+            self._rosbridge.sendMessage(json.dumps({
                 'op': 'unadvertise',
                 'id': self._advertise_id,
                 'topic': self._topic_name
@@ -624,7 +675,7 @@ class _ServiceClient(object):
             self._service_name, self._rosbridge.id_counter)
         if callable(cb):
             self._rosbridge.register_service_callback(service_id, cb)
-        self._rosbridge.send(json.dumps({
+        self._rosbridge.sendMessage(json.dumps({
             'op': 'call_service',
             'id': service_id,
             'service': self._service_name,
@@ -648,7 +699,7 @@ class _ServiceServer(object):
         self._service_type = service_type
         self._handler = handler
 
-        self._rosbridge.send(json.dumps({
+        self._rosbridge.sendMessage(json.dumps({
             'op': 'advertise_service',
             'type': self._service_type,
             'service': self._service_name
