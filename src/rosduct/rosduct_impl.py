@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+import time
+
 import rospy
 from rosduct.srv import ROSDuctConnection, ROSDuctConnectionResponse
 from conversions import from_dict_to_JSON
@@ -14,6 +16,7 @@ from conversions import is_ros_message_installed, is_ros_service_installed
 from pydoc import locate
 import socket
 
+import trollius as asyncio
 from trollius import ConnectionRefusedError
 
 from rosbridge_client import ROSBridgeClient
@@ -105,9 +108,11 @@ class ROSduct(object):
         while not rospy.is_shutdown() and not connected:
             try:
                 self.client = ROSBridgeClient(self.rosbridge_ip,
-                                              self.rosbridge_port)
+                                              self.rosbridge_port,
+                                              asyncio.get_event_loop())
                 while not connected: # give the asyncio stuff time to finish
-                    rospy.sleep(1)
+                    time.sleep(1)    # don't use rospy.sleep
+                                     # so we progress if simulator is paused
                     if self.client._connected:
                         connected = True
                     else:
