@@ -4,17 +4,10 @@ import time
 
 import rospy
 from rosduct.srv import ROSDuctConnection, ROSDuctConnectionResponse
-from conversions import from_dict_to_JSON
-from conversions import from_JSON_to_dict
 from conversions import from_dict_to_ROS
 from conversions import from_ROS_to_dict
-from conversions import from_JSON_to_ROS
-from conversions import from_ROS_to_JSON
-from conversions import get_ROS_msg_type
 from conversions import get_ROS_class
 from conversions import is_ros_message_installed, is_ros_service_installed
-from pydoc import locate
-import socket
 
 import trollius as asyncio
 from trollius import ConnectionRefusedError
@@ -27,36 +20,12 @@ topics, services and parameters from a remote
 roscore to a local roscore.
 
 Author: Sammy Pfeiffer <Sammy.Pfeiffer at student.uts.edu.au>
+Modified by Chris Bollinger <cwbollinger@gmail.com>
 """
-
-yaml_config = '''
-# ROSbridge websocket server info
-rosbridge_ip: 192.168.1.31
-rosbridge_port: 9090
-# Topics being published in the robot to expose locally
-remote_topics: [ ['/joint_states', 'sensor_msgs/JointState'],
-                    ['/tf', 'tf2_msgs/TFMessage'],
-                    ['/scan', 'sensor_msgs/LaserScan']
-                    ]
-# Topics being published in the local roscore to expose remotely
-local_topics: [
-                    ['/test1', 'std_msgs/String'],
-                    ['/closest_point', 'sensor_msgs/LaserScan']
-                    ]
-# Services running in the robot to expose locally
-remote_services: [
-                    ['/rosout/get_loggers', 'roscpp/GetLoggers']
-                    ]
-# Services running locally to expose to the robot
-local_services: [
-                    ['/add_two_ints', 'beginner_tutorials/AddTwoInts']
-                    ]
-# Parameters to be sync, they will be polled to stay in sync
-parameters: ['/robot_description']
-parameter_polling_hz: 1'''
 
 
 class ROSduct(object):
+
     def __init__(self):
         # ROSbridge
         self.rosbridge_ip = rospy.get_param('~rosbridge_ip', None)
@@ -70,26 +39,28 @@ class ROSduct(object):
         # Topics
         # TODO: check if topic types are installed, if not, give a warning
         self.remote_topics = rospy.get_param('~remote_topics', [])
-        #rospy.loginfo("Remote topics: " + str(self.remote_topics))
+        # rospy.loginfo("Remote topics: " + str(self.remote_topics))
         self.local_topics = rospy.get_param('~local_topics', [])
-        #rospy.loginfo("Local topics: " + str(self.local_topics))
+        # rospy.loginfo("Local topics: " + str(self.local_topics))
 
         # Services
         # TODO: check if service types are installed
         self.remote_services = rospy.get_param('~remote_services', [])
-        #rospy.loginfo("Remote services: " + str(self.remote_services))
+        # rospy.loginfo("Remote services: " + str(self.remote_services))
         self.local_services = rospy.get_param('~local_services', [])
-        #rospy.loginfo("Local services: " + str(self.local_services))
+        # rospy.loginfo("Local services: " + str(self.local_services))
 
         # Parameters
         self.rate_hz = rospy.get_param('~parameter_polling_hz', 1)
         self.parameters = rospy.get_param('~parameters', [])
-        #rospy.loginfo("Parameters: " + str(self.parameters))
+        # rospy.loginfo("Parameters: " + str(self.parameters))
         self.last_params = {}
 
         self.check_if_msgs_are_installed()
 
         self.initialize()
+
+        # add services to modify connections during runtime
         self.expose_local_topic = rospy.Service('~expose_local_topic', ROSDuctConnection, self.add_local_topic)
         self.close_local_topic = rospy.Service('~close_local_topic', ROSDuctConnection, self.remove_local_topic)
         self.expose_local_service = rospy.Service('~expose_local_service', ROSDuctConnection, self.add_local_service)
@@ -110,9 +81,8 @@ class ROSduct(object):
                 self.client = ROSBridgeClient(self.rosbridge_ip,
                                               self.rosbridge_port,
                                               asyncio.get_event_loop())
-                while not connected: # give the asyncio stuff time to finish
-                    time.sleep(1)    # don't use rospy.sleep
-                                     # so we progress if simulator is paused
+                while not connected:  # give the asyncio stuff time to finish
+                    time.sleep(1)     # don't use rospy.sleep, sim might be paused
                     if self.client._connected:
                         connected = True
                     else:
@@ -182,14 +152,12 @@ class ROSduct(object):
             msg.alias_name = remote_name
             self.add_local_service(msg)
 
-
         # Get all params and store them for further updates
         for param in self.parameters:
             if type(param) == list:
                 # remote param name is the first one
                 param = param[0]
             self.last_params[param] = self.client.get_param(param)
-
 
     def add_local_topic(self, msg):
         bridgepub = self.client.publisher(msg.alias_name,
@@ -339,6 +307,7 @@ class ROSduct(object):
         # create a rosbridge subscriber on demand
         # and also unregister it if no one is listening
         class CustomSubscribeListener(rospy.SubscribeListener):
+
             def __init__(this):
                 super(CustomSubscribeListener, this).__init__()
                 this.bridgesub = None
@@ -482,12 +451,12 @@ class ROSduct(object):
         """
         r = rospy.Rate(self.rate_hz)
         while not rospy.is_shutdown():
-            if not self.client._connected: # we've lost the connection
+            if not self.client._connected:  # we've lost the connection
                 rospy.logerr("Unexpected disconnect from server, shutting down...")
                 rospy.signal_shutdown("We've lost the connection!")
-                #del self.client # will this remove all the pub/sub objects?
-                #self.client.reconnect()
-                #self.initialize()
+                # del self.client # will this remove all the pub/sub objects?
+                # self.client.reconnect()
+                # self.initialize()
             self.sync_params()
             r.sleep()
 
