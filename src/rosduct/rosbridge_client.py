@@ -704,7 +704,7 @@ class _ServiceServer(object):
     def unregister(self):
         """Unadvertise the service"""
         self._rosbridge.unregister_service_server(self._service_name)
-        self._rosbridge.send(json.dumps({
+        self._rosbridge.sendMessage(json.dumps({
             'op': 'unadvertise_service',
             'service': self._service_name
         }))

@@ -237,7 +237,7 @@ class ROSduct(object):
     def remove_local_service(self, msg):
         for i, service in enumerate(self._instances['services']):
             if msg.conn_name in service:
-                service[msg.conn_name]['rosservprox'].unregister()
+                service[msg.conn_name]['rosservprox'].close()
                 service[msg.conn_name]['bridgeservserver'].unregister()
                 del self._instances['services'][i]
                 break
